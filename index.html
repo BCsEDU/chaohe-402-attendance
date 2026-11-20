@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+  <title>班級出缺席請假與聯絡簿補作業追蹤</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header id="app-header" class="app-header hidden">
+    <div class="header-inner">
+      <div class="brand">
+        <span class="app-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="17" rx="3.5" />
+            <path d="M8 2.5v3M16 2.5v3M3 9h18M9 14.5l2 2 4-4" />
+          </svg>
+        </span>
+        <h1>出缺席與聯絡簿補作業</h1>
+        <span id="hdr-class-badge" class="class-badge">402 班</span>
+        <span id="hdr-sync-pill" class="sync-pill">Supabase 雲端同步</span>
+      </div>
+      <div class="hdr-actions">
+        <button id="btn-toggle-privacy" type="button" class="hdr-btn hidden">隱藏姓名（僅座號）</button>
+        <button id="btn-load-demo" type="button" class="hdr-btn hidden">載入範例資料</button>
+        <button id="btn-refresh" type="button" class="hdr-btn">
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <polyline points="21 3 21 9 15 9" />
+          </svg>
+          重新整理
+        </button>
+        <button id="btn-logout" type="button" class="hdr-btn">登出</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 登入畫面 -->
+  <section id="auth-section" class="auth-wrap">
+    <div id="login-card" class="card login-card">
+      <div class="login-app-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="17" rx="3.5" />
+          <path d="M8 2.5v3M16 2.5v3M3 9h18M9 14.5l2 2 4-4" />
+        </svg>
+      </div>
+      <h2>出缺席與聯絡簿追蹤</h2>
+      <p class="login-desc">
+        記錄出缺席日期、假別（事假／病假／喪假）並結合每日聯絡簿，掌握學生待補作業進度。
+        <br />沿用 <strong>Supabase 教師密碼</strong>，雲端僅存座號。
+      </p>
+      <form id="login-form">
+        <div class="field-group">
+          <label class="field-label" for="input-pw">教師密碼</label>
+          <input
+            id="input-pw"
+            class="input-text"
+            type="password"
+            autocomplete="current-password"
+            placeholder="輸入教師後台密碼"
+            required
+          />
+        </div>
+        <label class="checkbox-row">
+          <input id="chk-remember-pw" type="checkbox" checked />
+          <span>在此裝置記住密碼（公用電腦請取消）</span>
+        </label>
+        <button id="btn-login-submit" type="submit" class="btn btn-primary btn-block">
+          登入雲端工作台
+        </button>
+      </form>
+      <div class="divider-or">或</div>
+      <button id="btn-enter-local" type="button" class="btn btn-secondary btn-block">
+        先用本機離線模式（資料存於瀏覽器）
+      </button>
+      <div id="login-error" class="err-banner hidden"></div>
+    </div>
+
+    <!-- 首次建表引導畫面 -->
+    <div id="schema-card" class="card hidden" style="border-radius: 22px;">
+      <h2 style="font-size: 1.3rem; font-weight: 700; margin-bottom: 8px;">只差一步：建立雲端資料表</h2>
+      <p class="login-desc" style="text-align: left; margin-bottom: 14px;">
+        密碼驗證通過！偵測到 Supabase 尚未建立本系統的 5 張資料表，請前往
+        <strong>Supabase Dashboard → SQL Editor</strong> 貼上執行一次：
+      </p>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+        <button id="btn-copy-sql" type="button" class="btn btn-primary btn-sm">複製建表 SQL</button>
+        <button id="btn-retry-cloud" type="button" class="btn btn-soft btn-sm">已執行完成，重新連線</button>
+        <button id="btn-fallback-local" type="button" class="btn btn-secondary btn-sm">改用本機模式</button>
+      </div>
+      <pre id="schema-sql-preview" class="sql-preview"></pre>
+      <div id="schema-error" class="err-banner hidden"></div>
+    </div>
+  </section>
+
+  <!-- 主工作台 -->
+  <main id="app-main" class="main-container hidden">
+    <div class="tabs-wrap">
+      <nav class="tabs-bar" aria-label="主要功能分頁">
+        <button type="button" class="tab-btn active" data-tab="overview">
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 11l3 3L22 4" />
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+          </svg>
+          待補作業總覽
+          <span id="tab-badge-unfinished" class="tab-count hidden">0</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab="daily">
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="3" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+          出缺席 ＆ 聯絡簿
+        </button>
+        <button type="button" class="tab-btn" data-tab="stats">
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10" />
+            <line x1="12" y1="20" x2="12" y2="4" />
+            <line x1="6" y1="20" x2="6" y2="14" />
+          </svg>
+          假別統計月報
+        </button>
+        <button type="button" class="tab-btn" data-tab="settings">
+          <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+          班級設定 ＆ 備份
+        </button>
+      </nav>
+    </div>
+
+    <section id="panel-overview" class="tab-panel"></section>
+    <section id="panel-daily" class="tab-panel hidden"></section>
+    <section id="panel-stats" class="tab-panel hidden"></section>
+    <section id="panel-settings" class="tab-panel hidden"></section>
+  </main>
+
+  <!-- 連續多日／批次請假 Sheet -->
+  <div id="batch-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="batch-modal-title">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="batch-modal-title">連續多日／批次請假登記</h3>
+        <button id="btn-close-batch" type="button" class="btn btn-secondary btn-sm">關閉</button>
+      </div>
+      <div class="field-group">
+        <label class="field-label">1. 選擇座號（可點選多位）</label>
+        <div id="batch-seat-picker" class="seat-grid" style="max-height: 190px; overflow-y: auto;"></div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div class="field-group">
+          <label class="field-label" for="batch-start-date">2. 開始日期</label>
+          <input id="batch-start-date" class="input-text" type="date" />
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="batch-end-date">結束日期</label>
+          <input id="batch-end-date" class="input-text" type="date" />
+        </div>
+      </div>
+      <label class="checkbox-row">
+        <input id="batch-skip-weekends" type="checkbox" checked />
+        <span>自動略過星期六、星期日</span>
+      </label>
+      <div class="field-group">
+        <label class="field-label">3. 請假類別</label>
+        <div id="batch-leave-chips" class="chip-select-row"></div>
+      </div>
+      <div class="field-group">
+        <label class="field-label">4. 請假時段</label>
+        <div id="batch-session-chips" class="chip-select-row"></div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="batch-note">5. 事由／備註（選填）</label>
+        <input id="batch-note" class="input-text" type="text" placeholder="例：流感請假休養、喪假三天" />
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button id="btn-cancel-batch" type="button" class="btn btn-secondary">取消</button>
+        <button id="btn-submit-batch" type="button" class="btn btn-primary">批次儲存出缺席</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script src="js/config.js"></script>
+  <script src="js/parser.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
