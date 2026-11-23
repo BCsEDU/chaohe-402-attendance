@@ -225,6 +225,11 @@ end $$;`;
     return p ? `<span class="badge" style="color:#515154;background:rgba(118,118,128,0.10)">${escapeHtml(p.label)}</span>` : "";
   }
 
+  function carryOverBadgeHtml(entry) {
+    if (!entry || !entry.isCarryOver) return "";
+    return `<span class="badge" style="color:#4F46E5;background:rgba(88,86,214,0.11)" title="前一個上學日指派，因本日未到校繳交而需返校後批改">前日待改 ${escapeHtml(U.formatShortDate(entry.item.date))}</span>`;
+  }
+
   function loadDailyDraftFromState(date) {
     const day = (store.state.contact_days || []).find((d) => d.date === date);
     const items = (store.state.contact_items || [])
@@ -363,7 +368,8 @@ end $$;`;
     if (unfinished.length === 0) return "";
     const parts = unfinished.map((u) => {
       const tag = u.entry.status === "submitted" ? "[已交待改]" : "";
-      return `${U.formatShortDate(u.date)} ${u.entry.item.title}${tag}`;
+      const carryTag = u.entry.isCarryOver ? "(前日待交)" : "";
+      return `${U.formatShortDate(u.entry.item.date)} ${u.entry.item.title}${carryTag}${tag}`;
     });
     return `${store.formatSeatLabel(studentGroup.seat, false)} 待補項目：${parts.join("、")}`;
   }
@@ -524,22 +530,23 @@ end $$;`;
             const blocksHtml = grp.absences
               .map((block) => {
                 const abs = block.absence;
-                let entriesHtml = "";
-                if (!block.hasContactDay) {
-                  entriesHtml = `
-                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:10px 14px;border-radius:12px;background:rgba(255,149,0,0.08);border:1px dashed rgba(255,149,0,0.35);">
+                const missingDayBanner = !block.hasContactDay
+                  ? `
+                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:10px 14px;border-radius:12px;background:rgba(255,149,0,0.08);border:1px dashed rgba(255,149,0,0.35);${block.entries.length > 0 ? "margin-bottom:8px;" : ""}">
                       <span class="muted-text" style="color:#B25000;font-weight:600;">尚未輸入 ${escapeHtml(abs.date)} 的聯絡簿內容</span>
                       <button type="button" class="btn btn-secondary btn-sm btn-jump-date" data-date="${escapeHtml(abs.date)}">補登該日聯絡簿 →</button>
-                    </div>`;
-                } else if (block.entries.length === 0) {
-                  entriesHtml = `<div class="muted-text" style="padding:4px 0;">當日聯絡簿沒有需要補交的項目</div>`;
-                } else {
+                    </div>`
+                  : "";
+
+                let entriesHtml = "";
+                if (block.entries.length > 0) {
                   entriesHtml = `<div class="makeup-list">${block.entries
                     .map((e) => {
                       const statusClass = `status-${e.status}`;
                       return `
                         <div class="makeup-row ${statusClass}">
                           <div class="makeup-item-info">
+                            ${carryOverBadgeHtml(e)}
                             ${categoryBadgeHtml(e.item.category)}
                             ${periodBadgeHtml(e.item.period)}
                             <span class="makeup-item-title">${escapeHtml(e.item.title)}</span>
@@ -557,17 +564,20 @@ end $$;`;
                         </div>`;
                     })
                     .join("")}</div>`;
+                } else if (block.hasContactDay) {
+                  entriesHtml = `<div class="muted-text" style="padding:4px 0;">當日聯絡簿沒有需要補交的項目</div>`;
                 }
+                entriesHtml = missingDayBanner + entriesHtml;
 
                 const skippedHtml =
                   block.skipped.length > 0
                     ? `<details class="skipped-details">
-                        <summary>同日略過 ${block.skipped.length} 項（半天時段未重疊或純提醒）</summary>
+                        <summary>略過 ${block.skipped.length} 項（半天時段未重疊／前日課堂或純提醒）</summary>
                         ${block.skipped
                           .map(
                             (sk) => `
                           <div class="skipped-row">
-                            <span>${categoryBadgeHtml(sk.item.category)} ${escapeHtml(sk.item.title)} <span class="muted-text">(${escapeHtml(sk.reason)})</span></span>
+                            <span>${sk.isCarryOver ? `<span class="badge" style="color:#515154;background:rgba(118,118,128,0.10)">${escapeHtml(U.formatShortDate(sk.item.date))}</span> ` : ""}${categoryBadgeHtml(sk.item.category)} ${escapeHtml(sk.item.title)} <span class="muted-text">(${escapeHtml(sk.reason)})</span></span>
                             <button type="button" class="btn btn-secondary btn-sm btn-set-status" data-absence-id="${escapeHtml(abs.id)}" data-item-id="${escapeHtml(sk.item.id)}" data-status="pending">+ 加入待補</button>
                           </div>`
                           )
@@ -649,6 +659,7 @@ end $$;`;
                           <div class="makeup-item-info">
                             <span class="seat-chip" style="font-size:0.84rem;padding:3px 10px;">${escapeHtml(store.formatSeatLabel(e.absence.seat))}</span>
                             ${leaveBadgeHtml(e.absence.leave_type, e.absence.session)}
+                            ${e.isCarryOver ? `<span class="badge" style="color:#4F46E5;background:rgba(88,86,214,0.11)">${escapeHtml(U.formatShortDate(e.absence.date))} 請假・未交待改</span>` : ""}
                             ${e.absence.note ? `<span class="absence-note-text">${escapeHtml(e.absence.note)}</span>` : ""}
                           </div>
                           <div class="status-seg">
@@ -1038,13 +1049,21 @@ end $$;`;
 
     // 當日即時連動預覽
     const savedDayItems = indexes.itemsByDate.get(date) || [];
+    const hasLinkedItems = dayAbsences.some((abs) => {
+      const d = indexes.entriesByAbsenceId.get(abs.id);
+      return d && (d.active.length > 0 || d.skipped.length > 0);
+    });
     let liveMatrixHtml = "";
     if (dayAbsences.length === 0) {
       liveMatrixHtml = `<div class="muted-text">此日目前無請假學生；未來若補登記此日缺席，已儲存的聯絡簿項目會自動套用。</div>`;
-    } else if (savedDayItems.length === 0) {
+    } else if (savedDayItems.length === 0 && !hasLinkedItems) {
       liveMatrixHtml = `<div class="muted-text">此日已有 ${dayAbsences.length} 位請假學生，請先在右上方拆解並按下「儲存當日聯絡簿」即可追蹤補交進度。</div>`;
     } else {
-      liveMatrixHtml = `<div class="student-cards">${dayAbsences
+      const pendingDayBanner =
+        savedDayItems.length === 0
+          ? `<div class="muted-text" style="margin-bottom:10px;color:#B25000;font-weight:600;">本日聯絡簿尚未儲存，以下先列出前一個上學日應繳交批改的作業：</div>`
+          : "";
+      liveMatrixHtml = `${pendingDayBanner}<div class="student-cards">${dayAbsences
         .map((abs) => {
           const data = indexes.entriesByAbsenceId.get(abs.id) || { active: [], skipped: [] };
           return `
@@ -1058,13 +1077,14 @@ end $$;`;
               </div>
               ${
                 data.active.length === 0
-                  ? `<div class="muted-text">依時段設定，此生當日無須補交項目。</div>`
+                  ? `<div class="muted-text">依時段設定，此生目前無須補交項目。</div>`
                   : `<div class="makeup-list">
                       ${data.active
                         .map(
                           (e) => `
                         <div class="makeup-row status-${e.status}">
                           <div class="makeup-item-info">
+                            ${carryOverBadgeHtml(e)}
                             ${categoryBadgeHtml(e.item.category)}
                             ${periodBadgeHtml(e.item.period)}
                             <span class="makeup-item-title">${escapeHtml(e.item.title)}</span>
@@ -1085,12 +1105,12 @@ end $$;`;
               ${
                 data.skipped.length > 0
                   ? `<details class="skipped-details">
-                      <summary>已略過 ${data.skipped.length} 項（半天時段未重疊／純提醒）</summary>
+                      <summary>已略過 ${data.skipped.length} 項（半天時段未重疊／前日課堂或純提醒）</summary>
                       ${data.skipped
                         .map(
                           (sk) => `
                         <div class="skipped-row">
-                          <span>${categoryBadgeHtml(sk.item.category)} ${escapeHtml(sk.item.title)} <span class="muted-text">(${escapeHtml(sk.reason)})</span></span>
+                          <span>${sk.isCarryOver ? `<span class="badge" style="color:#515154;background:rgba(118,118,128,0.10)">${escapeHtml(U.formatShortDate(sk.item.date))}</span> ` : ""}${categoryBadgeHtml(sk.item.category)} ${escapeHtml(sk.item.title)} <span class="muted-text">(${escapeHtml(sk.reason)})</span></span>
                           <button type="button" class="btn btn-secondary btn-sm btn-set-status" data-absence-id="${escapeHtml(abs.id)}" data-item-id="${escapeHtml(sk.item.id)}" data-status="pending">+ 加入待補</button>
                         </div>`
                         )

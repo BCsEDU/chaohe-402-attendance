@@ -139,6 +139,30 @@
     return true;
   }
 
+  function getPreviousSchoolDate(dateStr, daysByDate, itemsByDate) {
+    for (let offset = 1; offset <= 7; offset += 1) {
+      const cand = addDays(dateStr, -offset);
+      const dow = parseDateLocal(cand).getDay();
+      if (dow !== 0 && dow !== 6) return cand;
+      if (
+        (daysByDate && daysByDate.has(cand)) ||
+        (itemsByDate && (itemsByDate.get(cand) || []).length > 0)
+      ) {
+        return cand;
+      }
+    }
+    return null;
+  }
+
+  function doesPrevDayItemCarryOver(item, absence) {
+    if (!item || !item.requires_makeup) return false;
+    // 下午請假者上午已到校，前日回家作業原則上已於早自習繳交
+    if (absence.session === "pm") return false;
+    // 前一日小考為當日校內完成；僅前日回家作業與訂簽需隔日到校繳交批改
+    if (item.category === "quiz") return false;
+    return item.period === "all" && (item.category === "homework" || item.category === "correction");
+  }
+
   function getActiveSeats(settings) {
     const maxSeat = Number(settings?.max_seat) || 29;
     const inactive = new Set(Array.isArray(settings?.inactive_seats) ? settings.inactive_seats : []);
@@ -168,12 +192,16 @@
     }
 
     const makeupByKey = new Map();
+    const makeupByAbsenceId = new Map();
     for (const rec of state.makeup_records || []) {
       makeupByKey.set(`${rec.absence_id}:${rec.item_id}`, rec);
+      if (!makeupByAbsenceId.has(rec.absence_id)) makeupByAbsenceId.set(rec.absence_id, []);
+      makeupByAbsenceId.get(rec.absence_id).push(rec);
     }
 
     const absencesByDate = new Map();
     const absencesBySeat = new Map();
+    const absenceBySeatDate = new Map();
     const sortedAbsences = [...(state.absences || [])].sort((a, b) => {
       if (a.date !== b.date) return b.date.localeCompare(a.date);
       return a.seat - b.seat;
@@ -184,9 +212,10 @@
       absencesByDate.get(abs.date).push(abs);
       if (!absencesBySeat.has(abs.seat)) absencesBySeat.set(abs.seat, []);
       absencesBySeat.get(abs.seat).push(abs);
+      absenceBySeatDate.set(`${abs.seat}:${abs.date}`, abs);
     }
 
-    // 計算每筆缺席對應的待補／略過項目
+    // 計算每筆缺席對應的待補／略過項目（包含：當日項目 ＋ 若前一個上學日未請假，前日應於今日繳交批改的作業）
     const entriesByAbsenceId = new Map();
     const allTrackedEntries = [];
 
@@ -194,8 +223,10 @@
       const dayItems = itemsByDate.get(abs.date) || [];
       const active = [];
       const skipped = [];
+      const seenItemIds = new Set();
 
       for (const item of dayItems) {
+        seenItemIds.add(item.id);
         const rec = makeupByKey.get(`${abs.id}:${item.id}`) || null;
         const autoMatch = doesItemApplyToAbsence(item, abs);
         if (rec) {
@@ -206,6 +237,7 @@
             status: rec.status,
             note: rec.note || "",
             manuallyAdded: !autoMatch,
+            isCarryOver: false,
           };
           active.push(entry);
           allTrackedEntries.push(entry);
@@ -217,6 +249,7 @@
             status: "pending",
             note: "",
             manuallyAdded: false,
+            isCarryOver: false,
           };
           active.push(entry);
           allTrackedEntries.push(entry);
@@ -224,9 +257,78 @@
           skipped.push({
             absence: abs,
             item,
+            isCarryOver: false,
             reason: !item.requires_makeup ? "純提醒免補" : "半天時段未重疊",
           });
         }
+      }
+
+      const prevDate = getPreviousSchoolDate(abs.date, daysByDate, itemsByDate);
+      const prevAbs = prevDate ? absenceBySeatDate.get(`${abs.seat}:${prevDate}`) : null;
+      if (prevDate && !prevAbs) {
+        const prevItems = itemsByDate.get(prevDate) || [];
+        for (const item of prevItems) {
+          if (seenItemIds.has(item.id)) continue;
+          seenItemIds.add(item.id);
+          const rec = makeupByKey.get(`${abs.id}:${item.id}`) || null;
+          const autoMatch = doesPrevDayItemCarryOver(item, abs);
+          if (rec) {
+            const entry = {
+              absence: abs,
+              item,
+              record: rec,
+              status: rec.status,
+              note: rec.note || "",
+              manuallyAdded: !autoMatch,
+              isCarryOver: true,
+            };
+            active.push(entry);
+            allTrackedEntries.push(entry);
+          } else if (autoMatch) {
+            const entry = {
+              absence: abs,
+              item,
+              record: null,
+              status: "pending",
+              note: "",
+              manuallyAdded: false,
+              isCarryOver: true,
+            };
+            active.push(entry);
+            allTrackedEntries.push(entry);
+          } else if (item.requires_makeup) {
+            skipped.push({
+              absence: abs,
+              item,
+              isCarryOver: true,
+              reason:
+                abs.session === "pm"
+                  ? "前日作業（上午已到校）"
+                  : item.category === "quiz"
+                    ? "前日校內小考"
+                    : "前日課堂時段項目",
+            });
+          }
+        }
+      }
+
+      // 保底保留任何既有已登錄的跨日補交紀錄，避免資料遺失
+      for (const rec of makeupByAbsenceId.get(abs.id) || []) {
+        if (seenItemIds.has(rec.item_id)) continue;
+        const item = itemsById.get(rec.item_id);
+        if (!item) continue;
+        seenItemIds.add(rec.item_id);
+        const entry = {
+          absence: abs,
+          item,
+          record: rec,
+          status: rec.status,
+          note: rec.note || "",
+          manuallyAdded: true,
+          isCarryOver: item.date !== abs.date,
+        };
+        active.push(entry);
+        allTrackedEntries.push(entry);
       }
 
       entriesByAbsenceId.set(abs.id, { active, skipped });
@@ -367,7 +469,7 @@
   }
 
   function exportUnfinishedMakeupCsv(state, indexes, formatSeatFn) {
-    const header = ["座號／稱呼", "缺席日期", "假別", "時段", "作業／小考項目", "類別", "補交狀態", "備註"];
+    const header = ["座號／稱呼", "缺席日期", "假別", "時段", "作業所屬日", "作業／小考項目", "類別", "補交狀態", "備註"];
     const lines = [header.map(escapeCsvCell).join(",")];
     const unfinished = indexes.allTrackedEntries
       .filter((e) => e.status === "pending" || e.status === "submitted")
@@ -383,6 +485,7 @@
           e.absence.date,
           CFG.LEAVE_TYPES[e.absence.leave_type]?.label || e.absence.leave_type,
           CFG.SESSIONS[e.absence.session]?.label || e.absence.session,
+          e.item.date,
           e.item.title,
           CFG.CATEGORIES[e.item.category]?.label || e.item.category,
           CFG.MAKEUP_STATUSES[e.status]?.label || e.status,
@@ -831,6 +934,8 @@
     formatShortDate,
     enumerateDateRange,
     doesItemApplyToAbsence,
+    getPreviousSchoolDate,
+    doesPrevDayItemCarryOver,
     getActiveSeats,
     buildDerivedIndexes,
     computeLeaveStats,
